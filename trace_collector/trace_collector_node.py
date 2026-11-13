@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import math
+import os
 import time
 
 import rclpy
+from rclpy.clock import Clock, ClockType
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.qos import qos_profile_sensor_data
@@ -36,6 +39,16 @@ class TraceCollectorNode(Node):
         self.declare_parameter("motion_position_threshold", 0.01)
         self.declare_parameter("motion_hold_samples", 2)
         self.declare_parameter("motion_timeout_ms", 300)
+        self.declare_parameter("capture_seconds", float(os.environ.get("MARVIN_TRACE_CAPTURE_SECONDS", "0")))
+        seconds = float(self.get_parameter("capture_seconds").value)
+        if not math.isfinite(seconds) or seconds < 0 or seconds > 300:
+            raise ValueError("capture_seconds must be between 0 and 300")
+        self._capture_started = time.monotonic()
+        self._capture_seconds = seconds
+        if seconds:
+            self._capture_timer = self.create_timer(
+                0.1, self._check_capture_deadline, clock=Clock(clock_type=ClockType.STEADY_TIME)
+            )
 
         self._trace_event_topic = str(self.get_parameter("trace_event_topic").value)
         self._summary_topic = str(self.get_parameter("summary_topic").value)
@@ -101,6 +114,12 @@ class TraceCollectorNode(Node):
             self._motion_detector.arm_trace(trace_id=sample.trace_id, command_applied_ns=event_ns)
         elif sample.stage == "first_state_change":
             self._motion_detector.disarm_trace(trace_id=sample.trace_id)
+
+    def _check_capture_deadline(self):
+        if time.monotonic() - self._capture_started >= self._capture_seconds:
+            self._publish_summaries(self._aggregator.flush_all())
+            self.get_logger().info("Bounded trace capture completed")
+            rclpy.shutdown()
 
     def _on_joint_state(self, msg: JointState) -> None:
         sample_ns = int(msg.header.stamp.sec) * 1_000_000_000 + int(msg.header.stamp.nanosec)
