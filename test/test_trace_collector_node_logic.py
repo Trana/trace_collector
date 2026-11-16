@@ -140,6 +140,18 @@ def test_now_ns_returns_positive_time() -> None:
     assert TraceCollectorNode._now_ns() > 0
 
 
+def test_capture_deadline_flushes_and_stops_only_collector(monkeypatch):
+    node = _make_node()
+    node._capture_started = 1.0
+    node._capture_seconds = 2.0
+    node.get_logger = lambda: SimpleNamespace(info=lambda *_args: None)
+    stopped = []
+    monkeypatch.setattr('trace_collector.trace_collector_node.time.monotonic', lambda: 3.0)
+    monkeypatch.setattr(rclpy, 'shutdown', lambda: stopped.append(True))
+    TraceCollectorNode._check_capture_deadline(node)
+    assert stopped == [True]
+
+
 def test_node_initializes_with_rclpy_context() -> None:
     rclpy.init(args=[])
     node = TraceCollectorNode()
